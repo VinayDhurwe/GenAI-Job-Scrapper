@@ -1,6 +1,3 @@
-# GenAI-Job-Scrapper
-Job Scrapper
-
 # GenAI-Job-Scrapper for Naukri.com
 
 A domain-specific job scraper for [Naukri.com](https://www.naukri.com/) that extracts job listings, filters them using AI analysis, and exports results to Excel files.

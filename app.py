@@ -362,42 +362,22 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import os
-import time
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
+import time
 from groq import Groq
 from langgraph.graph import StateGraph
-from typing import TypedDict, Optional, List, Dict
-from selenium_stealth import stealth
-from fake_useragent import UserAgent
-from tavily import TavilyClient
+from typing import TypedDict, Optional
 import json
-import requests
 import re
 from urllib.parse import urlencode
 
-# Initialize session state for API keys
-if 'groq_key' not in st.session_state:
-    st.session_state.groq_key = ""
-if 'tavily_key' not in st.session_state:
-    st.session_state.tavily_key = ""
+# ------------------------- CONFIGURATION -------------------------
+# These will be set via Streamlit UI
+groq_api_key = ""
+tavily_api_key = ""
 
-# ------------------------- JOB STATE DEFINITION -------------------------
-class JobState(TypedDict):
-    Title: str
-    Company: str
-    Experience: str
-    Description: str
-    is_relevant: Optional[str]
-    is_competitor: Optional[str]
-    job_tier: Optional[str]
-
-# Dictionary mapping fields to search keywords.
+# Dictionary mapping fields to search keywords
 FIELD_KEYWORDS = {
     "Data Science": "data scientist",
     "Human Resources": "human resources",
@@ -412,39 +392,40 @@ FIELD_KEYWORDS = {
     "Product Management": "product management"
 }
 
-# Global field for relevance; will be updated for each domain.
-FIELD = "data science"  # default
+# Global field for relevance; will be updated for each domain
+FIELD = "data science"
+
+# ------------------------- JOB STATE DEFINITION -------------------------
+class JobState(TypedDict):
+    Title: str
+    Company: str
+    Experience: str
+    Description: str
+    is_relevant: Optional[str]
+    is_competitor: Optional[str]
+    job_tier: Optional[str]
 
 # ------------------------- Tavily API HELPER FUNCTIONS -------------------------
-def search_with_tavily(query: str, tavily_key: str) -> str:
-    """Uses Tavily API with provided key to search for company careers."""
+def search_with_tavily(query: str) -> str:
+    """Searches Tavily API and returns the first result URL."""
     try:
-        tavily_client = TavilyClient(tavily_key)
+        tavily_client = TavilyClient(tavily_api_key)
         response = tavily_client.search(query=query, max_results=1)
-        if "results" in response and response["results"]:
-            return response["results"][0]["url"]
-        else:
-            raise KeyError("Key 'results' not found or empty in response")
+        return response["results"][0]["url"] if "results" in response and response["results"] else ""
     except Exception as e:
-        print(f"Error during Tavily search for query '{query}': {e}")
+        print(f"Error during Tavily search for '{query}': {e}")
         return ""
 
-def get_company_career_page(company_name: str, tavily_key: str) -> str:
-    """Finds company career page or homepage using Tavily with provided key."""
-    career_query = f"{company_name} careers"
-    career_url = search_with_tavily(career_query, tavily_key)
+def get_company_career_page(company_name: str) -> str:
+    """Finds company career page or homepage using Tavily."""
+    career_url = search_with_tavily(f"{company_name} careers")
     if career_url:
         return career_url
-    
-    homepage_query = company_name
-    homepage_url = search_with_tavily(homepage_query, tavily_key)
-    if homepage_url:
-        return homepage_url
-    return ""
+    return search_with_tavily(company_name)
 
 # ------------------------- LANGGRAPH WORKFLOW FUNCTIONS -------------------------
-def check_relevance(state: JobState, groq_key: str) -> JobState:
-    """Checks if job is relevant to selected domain using Groq API."""
+def check_relevance(state: JobState) -> JobState:
+    """Checks if job is relevant to selected domain."""
     prompt = f"""
     Job Title: {state['Title']}
     Company: {state['Company']}
@@ -453,7 +434,7 @@ def check_relevance(state: JobState, groq_key: str) -> JobState:
     Respond with JSON in the format: {{"is_relevant": "Yes" or "No"}}
     """
     try:
-        client = Groq(api_key=groq_key)
+        client = Groq(api_key=groq_api_key)
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile"
@@ -461,32 +442,28 @@ def check_relevance(state: JobState, groq_key: str) -> JobState:
         result = json.loads(response.choices[0].message.content.strip())
         state["is_relevant"] = result.get("is_relevant", "No")
     except Exception as e:
-        print(f"Error in check_relevance for '{state['Title']}':", e)
+        print(f"Error in check_relevance for '{state['Title']}': {e}")
         state["is_relevant"] = "No"
     return state
 
-def check_competitor_with_fallback(state: JobState, groq_key: str) -> JobState:
-    """Checks if job is from competitor company using Groq API."""
+def check_competitor_with_fallback(state: JobState) -> JobState:
+    """Checks if job is from competitor company."""
     prompt = f"""
     Job Company: {state['Company']}
     Determine if this job posting is from a competitor edtech company from the following:
     BYJU'S, Unacademy, Vedantu, Toppr, UpGrad, Simplilearn, WhiteHat Jr., Classplus, Embibe, EduGorilla, iQuanta, TrainerCentral, Meritnation, Testbook, Edukart, Adda247, CollegeDekho, Leverage Edu, Next Education, Infinity Learn.
     If you are uncertain, respond with: {{"is_competitor": "No"}}.
-    Ensure your output is strictly valid JSON.
     """
     max_retries = 5
     delay = 5
     for attempt in range(max_retries):
         try:
-            client = Groq(api_key=groq_key)
+            client = Groq(api_key=groq_api_key)
             response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile"
             )
-            raw_content = response.choices[0].message.content.strip()
-            if not raw_content:
-                raise ValueError("Empty response")
-            result = json.loads(raw_content)
+            result = json.loads(response.choices[0].message.content.strip())
             state["is_competitor"] = result.get("is_competitor", "No")
             return state
         except Exception as e:
@@ -495,8 +472,8 @@ def check_competitor_with_fallback(state: JobState, groq_key: str) -> JobState:
     state["is_competitor"] = "No"
     return state
 
-def determine_tier(state: JobState, groq_key: str) -> JobState:
-    """Determines job tier (Fresher/Mid/Senior) using Groq API."""
+def determine_tier(state: JobState) -> JobState:
+    """Determines job tier (Fresher/Mid/Senior)."""
     prompt = f"""
     Job Title: {state['Title']}
     Experience: {state['Experience']}
@@ -505,49 +482,39 @@ def determine_tier(state: JobState, groq_key: str) -> JobState:
     Respond with JSON in the format: {{"job_tier": "Fresher" or "Mid" or "Senior"}}
     """
     try:
-        client = Groq(api_key=groq_key)
+        client = Groq(api_key=groq_api_key)
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile"
         )
         raw_content = response.choices[0].message.content.strip()
-        
-        # Handle possible markdown formatting
         if raw_content.startswith("```json"):
-            raw_content = raw_content[7:-3]
-            
+            raw_content = raw_content[7:-3]  # Strip markdown if present
         result = json.loads(raw_content)
         tier = result.get("job_tier", "N/A").strip()
-        
-        # Validate tier value
-        if tier not in ["Fresher", "Mid", "Senior"]:
-            tier = "N/A"
-            
-        state["job_tier"] = tier
-        
+        state["job_tier"] = tier if tier in ["Fresher", "Mid", "Senior"] else "N/A"
     except Exception as e:
         print(f"Error in determine_tier for '{state['Title']}': {e}")
         state["job_tier"] = "N/A"
-        
     return state
 
-def build_job_workflow(groq_key: str) -> StateGraph:
-    """Builds job processing workflow with Groq key."""
+def build_job_workflow() -> StateGraph:
+    """Builds job processing workflow."""
     graph = StateGraph(JobState)
-    graph.add_node(lambda state: check_relevance(state, groq_key), name="check_relevance")
-    graph.add_node(lambda state: check_competitor_with_fallback(state, groq_key), name="check_competitor")
-    graph.add_node(lambda state: determine_tier(state, groq_key), name="determine_tier")
+    graph.add_node("check_relevance", lambda state: check_relevance(state))
+    graph.add_node("check_competitor", lambda state: check_competitor_with_fallback(state))
+    graph.add_node("determine_tier", lambda state: determine_tier(state))
     graph.add_edge("check_relevance", "check_competitor")
     graph.add_edge("check_competitor", "determine_tier")
     graph.set_entry_point("check_relevance")
     graph.set_finish_point("determine_tier")
     return graph
 
-def process_job(job: dict, field: str, groq_key: str, tavily_key: str) -> Optional[dict]:
+def process_job(job: dict, field: str) -> Optional[dict]:
     """Processes job through workflow and assigns tier."""
     global FIELD
-    FIELD = field  # Update global field for relevance check
-    
+    FIELD = field
+
     state: JobState = {
         "Title": job.get("Title", ""),
         "Company": job.get("Company", ""),
@@ -557,96 +524,84 @@ def process_job(job: dict, field: str, groq_key: str, tavily_key: str) -> Option
         "is_competitor": None,
         "job_tier": None,
     }
-    
-    graph = build_job_workflow(groq_key)
+
+    graph = build_job_workflow()
     compiled_graph = graph.compile()
     result_state = compiled_graph.invoke(state)
-    
+
     if (result_state.get("is_relevant", "").lower() == "yes" and
         result_state.get("is_competitor", "").lower() == "no"):
         job["Job Tier"] = result_state.get("job_tier", "N/A")
-        career_url = get_company_career_page(job.get("Company", ""), tavily_key)
+        career_url = get_company_career_page(job.get("Company", ""))
         if career_url:
             job["Job Link"] = career_url
             return job
         else:
-            print(f"Dropping job '{job.get('Title')}' because no website was found for {job.get('Company')}")
+            print(f"Dropping job '{job.get('Title')}' due to missing website for {job.get('Company')}")
             return None
     else:
         return None
 
-# ------------------------- SELENIUM & BEAUTIFULSOUP FUNCTIONS -------------------------
-def setup_webdriver():
-    """Sets up headless Chrome driver with stealth settings."""
-    options = webdriver.ChromeOptions()
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-dev-shm-usage')
-    desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
-    options.add_argument(f'user-agent={desktop_ua}')
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    driver = webdriver.Chrome(options=options)
-    stealth(driver,
-            languages=["en-US", "en"],
-            vendor="Google Inc.",
-            platform="Win32",
-            webgl_vendor="Intel Inc.",
-            renderer="Intel Iris OpenGL Engine",
-            fix_hairline=True)
-    driver.implicitly_wait(10)
-    return driver
-
-def extract_jobs(soup):
-    """Extracts job details from Naukri page soup."""
-    job_list = []
-    job_wrappers = soup.select("div.srp-jobtuple-wrapper")
-    for wrapper in job_wrappers:
-        job = wrapper.select_one("div.cust-job-tuple")
-        if not job:
-            continue
-        title_elem = job.select_one("a.title")
-        company_elem = job.select_one("a.comp-name, a.subTitle")
-        exp_elem = job.select_one("span.expwdth, li.experience")
-        sal_elem = job.select_one("span.sal-wrap, li.salary")
-        loc_elem = job.select_one("span.locWdth, li.location")
-        desc_elem = job.select_one("span.job-desc, div.job-description")
-        posted_elem = job.select_one("span.fleft.postedDate, span.job-post-day")
-        link_elem = job.select_one("a.title")
+# ------------------------- PLAYWRIGHT & BEAUTIFULSOUP FUNCTIONS -------------------------
+def extract_jobs(url):
+    """Extracts jobs from Naukri using Playwright."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36")
+        page = context.new_page()
+        page.goto(url)
         
-        job_list.append({
-            'Title': title_elem.get_text(strip=True) if title_elem else 'N/A',
-            'Company': company_elem.get_text(strip=True) if company_elem else 'N/A',
-            'Experience': exp_elem.get_text(strip=True) if exp_elem else 'N/A',
-            'Salary': sal_elem.get_text(strip=True) if sal_elem else 'Not disclosed',
-            'Location': loc_elem.get_text(strip=True) if loc_elem else 'N/A',
-            'Description': desc_elem.get_text(strip=True) if desc_elem else 'N/A',
-            'Posted Date': posted_elem.get_text(strip=True) if posted_elem else 'N/A',
-            'Skills': ', '.join([tag.get_text(strip=True) for tag in job.select("li.tag, li.tag-li")]),
-            'Job Link': link_elem["href"] if link_elem and link_elem.has_attr("href") else 'N/A'
-        })
-    return job_list
+        try:
+            page.wait_for_selector("div.srp-jobtuple-wrapper", timeout=20000)
+        except:
+            print("Timeout waiting for job results")
 
-def get_page_source(driver):
-    """Scrolls and gets page source for BeautifulSoup."""
-    scroll_pause_time = 2
-    screen_height = driver.execute_script("return window.screen.height;")
-    i = 1
-    while True:
-        driver.execute_script(f"window.scrollTo(0, {screen_height} * {i});")
-        i += 1
-        time.sleep(scroll_pause_time)
-        scroll_height = driver.execute_script("return document.body.scrollHeight;")
-        if (screen_height * i) > scroll_height:
-            break
-    return BeautifulSoup(driver.page_source, 'html.parser')
+        # Scroll to load all jobs
+        scroll_pause_time = 2
+        last_height = page.evaluate("document.body.scrollHeight")
+        while True:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(scroll_pause_time)
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+
+        html = page.content()
+        soup = BeautifulSoup(html, 'html.parser')
+        context.close()
+
+        job_list = []
+        job_wrappers = soup.select("div.srp-jobtuple-wrapper")
+        for wrapper in job_wrappers:
+            job = wrapper.select_one("div.cust-job-tuple")
+            if not job:
+                continue
+
+            title_elem = job.select_one("a.title")
+            company_elem = job.select_one("a.comp-name, a.subTitle")
+            exp_elem = job.select_one("span.expwdth, li.experience")
+            sal_elem = job.select_one("span.sal-wrap, li.salary")
+            loc_elem = job.select_one("span.locWdth, li.location")
+            desc_elem = job.select_one("span.job-desc, div.job-description")
+            posted_elem = job.select_one("span.fleft.postedDate, span.job-post-day")
+            link_elem = job.select_one("a.title")
+
+            job_list.append({
+                'Title': title_elem.get_text(strip=True) if title_elem else 'N/A',
+                'Company': company_elem.get_text(strip=True) if company_elem else 'N/A',
+                'Experience': exp_elem.get_text(strip=True) if exp_elem else 'N/A',
+                'Salary': sal_elem.get_text(strip=True) if sal_elem else 'Not disclosed',
+                'Location': loc_elem.get_text(strip=True) if loc_elem else 'N/A',
+                'Description': desc_elem.get_text(strip=True) if desc_elem else 'N/A',
+                'Posted Date': posted_elem.get_text(strip=True) if posted_elem else 'N/A',
+                'Skills': ', '.join([tag.get_text(strip=True) for tag in job.select("li.tag, li.tag-li")]),
+                'Job Link': link_elem["href"] if link_elem and link_elem.has_attr("href") else 'N/A'
+            })
+        return job_list
 
 # ------------------------- HELPER FUNCTION: FILTER JOBS -------------------------
 def is_job_recent(posted_date: str) -> bool:
-    """Checks if job was posted in last 3 days."""
     pd_lower = posted_date.lower()
     if any(term in pd_lower for term in ["just now", "few hours", "today", "1 day", "2 days", "3 days"]):
         return True
@@ -656,44 +611,32 @@ def is_job_recent(posted_date: str) -> bool:
 
 # ------------------------- MAIN SCRAPING FUNCTION -------------------------
 def scrape_jobs_for_domain(domain: str, groq_key: str, tavily_key: str) -> pd.DataFrame:
-    """Scrapes jobs for a specific domain with provided API keys."""
+    """Scrapes jobs for a specific domain."""
+    global groq_api_key, tavily_api_key
+    groq_api_key = groq_key
+    tavily_api_key = tavily_key
     global FIELD
     FIELD = domain.lower()
     search_keyword = FIELD_KEYWORDS[domain]
-    
-    driver = setup_webdriver()
     base_url = "https://www.naukri.com/jobs-in-india "
-    params = {
-        "k": search_keyword,
-        "l": "india",
-        "jobAge": "1"
-    }
+    params = {"k": search_keyword, "l": "india", "jobAge": "1"}
     url = f"{base_url}?{urlencode(params)}"
-    
-    driver.get(url)
-    try:
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.srp-jobtuple-wrapper"))
-        )
-    except TimeoutException:
-        pass
-    
-    time.sleep(5)
-    soup = get_page_source(driver)
-    job_list = extract_jobs(soup)
-    driver.quit()
-    
+
+    job_list = extract_jobs(url)
     final_jobs = []
+
+    client = Groq(api_key=groq_api_key)
+    tavily_client = TavilyClient(tavily_api_key)
+    
     for job in job_list:
-        processed = process_job(job, domain, groq_key, tavily_key)
+        processed = process_job(job, domain)
         if processed and is_job_recent(processed.get("Posted Date", "")):
             final_jobs.append(processed)
-    
+
     return pd.DataFrame(final_jobs)
 
 # ------------------------- EXCEL EXPORT FUNCTION -------------------------
 def to_excel(df):
-    """Converts DataFrame to Excel file in memory."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False)
@@ -705,19 +648,24 @@ def main():
     st.title("🌐 Domain-Specific Job Scraper")
     st.markdown("Enter API keys and select a domain to scrape jobs")
 
+    # Initialize session state for API keys
+    if 'groq_key' not in st.session_state:
+        st.session_state.groq_key = ""
+    if 'tavily_key' not in st.session_state:
+        st.session_state.tavily_key = ""
+
     # API Key Inputs
     col1, col2 = st.columns(2)
     with col1:
         groq_input = st.text_input("Groq API Key", value=st.session_state.groq_key, type="password")
     with col2:
         tavily_input = st.text_input("Tavily API Key", value=st.session_state.tavily_key, type="password")
-    
+
     if st.button("✅ Set API Keys"):
         st.session_state.groq_key = groq_input
         st.session_state.tavily_key = tavily_input
         st.success("API keys updated!")
 
-    # Only show domain selector if keys are set
     if st.session_state.groq_key and st.session_state.tavily_key:
         st.markdown("---")
         col1, col2 = st.columns([3, 1])
@@ -732,7 +680,9 @@ def main():
 
         if start_scrape:
             with st.spinner(f"Scraping jobs for {selected_domain}... This may take 1-2 minutes"):
-                df = scrape_jobs_for_domain(selected_domain, st.session_state.groq_key, st.session_state.tavily_key)
+                df = scrape_jobs_for_domain(
+                    selected_domain, st.session_state.groq_key, st.session_state.tavily_key
+                )
                 if not df.empty:
                     st.session_state.scraped_data = df
                     st.session_state.domain = selected_domain
@@ -740,14 +690,11 @@ def main():
                 else:
                     st.warning("No relevant jobs found for this domain")
 
-        # Display results and download button
         if st.session_state.scraped_data is not None:
             domain = st.session_state.domain
             df = st.session_state.scraped_data
-            
             st.markdown(f"### 📋 {domain} Jobs Results")
             st.dataframe(df, use_container_width=True)
-            
             excel_data = to_excel(df)
             st.download_button(
                 label="📥 Download Excel",

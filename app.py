@@ -477,24 +477,30 @@ def scrape_jobs(domain: str) -> (list, str):
     headers = {'User-Agent': ua.random}
     # URL-encode keyword
     k_enc = urllib.parse.quote_plus(keyword)
-    url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
+    # Use Naukri's search endpoint
+    url = f"https://www.naukri.com/jobs?k={k_enc}&l=India&jobAge=1"
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.content, 'html.parser')
-    # Updated selector: div.jobTuple or div.srp-jobtuple-wrapper
-    cards = soup.select('div.jobTuple, div.srp-jobtuple-wrapper')
+    # Main job wrapper selector
+    wrappers = soup.select('div.srp-jobtuple-wrapper')
     results = []
 
-    for card in cards:
-        title_elem = card.select_one('a.title')
-        comp_elem  = card.select_one('a.subTitle')
-        loc_elem   = card.select_one('li.location')
-        exp_elem   = card.select_one('li.experience')
-        sal_elem   = card.select_one('li.salary')
-        desc_elem  = card.select_one('div.job-description, span.job-desc')
+    for wrapper in wrappers:
+        job = wrapper.select_one('div.cust-job-tuple') or wrapper
+        title_elem = job.select_one('a.title')
+        comp_elem  = job.select_one('a.subTitle')
+        loc_elem   = job.select_one('li.location')
+        exp_elem   = job.select_one('li.experience')
+        sal_elem   = job.select_one('li.salary')
+        desc_elem  = job.select_one('span.job-desc')
 
-        job = {
-            'Title': title_elem.get_text(strip=True) if title_elem else '',
+        title = title_elem.get_text(strip=True) if title_elem else ''
+        if not title:
+            continue
+
+        job_data = {
+            'Title': title,
             'Company': comp_elem.get_text(strip=True) if comp_elem else '',
             'Location': loc_elem.get_text(strip=True) if loc_elem else '',
             'Experience': exp_elem.get_text(strip=True) if exp_elem else '',
@@ -502,11 +508,11 @@ def scrape_jobs(domain: str) -> (list, str):
             'Description': desc_elem.get_text(strip=True) if desc_elem else '',
             'Domain': domain
         }
-        state = pipeline.invoke(job)
+        state = pipeline.invoke(job_data)
         if state['is_relevant'].lower() == 'yes' and state['is_competitor'].lower() == 'no':
-            job['Job Tier'] = state['job_tier']
-            job['Job Link'] = get_career_page(job['Company'])
-            results.append(job)
+            job_data['Job Tier'] = state['job_tier']
+            job_data['Job Link'] = get_career_page(job_data['Company'])
+            results.append(job_data)
 
     return results, url
 

@@ -364,165 +364,167 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import streamlit as st
-from tavily import TavilyClient
+from io import BytesIO
+from fake_useragent import UserAgent
 from groq import Groq
+from tavily import TavilyClient
 from langgraph.graph import StateGraph
 import json
 
-# ——————————————— Streamlit Secrets / Inputs ———————————————
-st.set_page_config(page_title="Job Scraper with AI Filtering", layout="wide")
-st.title("🔍 Job Scraper with AI Filtering")
+# -------------------- Configuration --------------------
+# Domains and keywords
+FIELD_KEYWORDS = {
+    "Data Science": "data scientist",
+    "Human Resources": "human resources",
+    "Digital Transformation": "digital transformation",
+    "Cyber Security": "cyber security",
+    "FinTech": "fintech",
+    "Project Management": "project management",
+    "Strategic Management": "strategic management",
+    "Business Management": "business management",
+    "General Management": "general management",
+    "Product Management": "product management"
+}
 
-# API key inputs (masked)
-if "GROQ_API_KEY" not in st.session_state:
-    st.session_state.GROQ_API_KEY = ""
-if "TAVILY_API_KEY" not in st.session_state:
-    st.session_state.TAVILY_API_KEY = ""
+# API keys from environment
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+if not GROQ_API_KEY or not TAVILY_API_KEY:
+    raise ValueError("Please set GROQ_API_KEY and TAVILY_API_KEY environment variables.")
 
-with st.expander("🔑 Enter Your API Keys", expanded=True):
-    st.session_state.GROQ_API_KEY = st.text_input(
-        "Groq API Key", type="password", value=st.session_state.GROQ_API_KEY
-    )
-    st.session_state.TAVILY_API_KEY = st.text_input(
-        "Tavily API Key", type="password", value=st.session_state.TAVILY_API_KEY
-    )
+# Initialize clients
+groq_client = Groq(api_key=GROQ_API_KEY)
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
-# Validate keys before proceeding
-if not st.session_state.GROQ_API_KEY or not st.session_state.TAVILY_API_KEY:
-    st.warning("Please enter **both** your Groq and Tavily API keys above.")
-    st.stop()
+# -------------------- LangGraph Pipeline --------------------
 
-# ——————————————— Initialize Clients & Pipeline ———————————————
-# Groq client & simple LangGraph pipeline
-client = Groq(api_key=st.session_state.GROQ_API_KEY)
-
-def check_relevance(state):
-    prompt = (
-        f"Job Title: {state['Title']}\n"
-        f"Company: {state['Company']}\n"
-        f"Description: {state['Description']}\n"
-        f"Determine if this is relevant. JSON: {{'is_relevant':'Yes'/'No'}}"
-    )
-    resp = client.chat.completions.create(
+def check_relevance(state: dict) -> dict:
+    prompt = f"""
+    Job Title: {state['Title']}
+    Company: {state['Company']}
+    Description: {state['Description']}
+    Determine relevance to {state['Domain']}. JSON: {{'is_relevant':'Yes'/'No'}}
+    """
+    resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
     )
     result = json.loads(resp.choices[0].message.content)
-    state["is_relevant"] = result.get("is_relevant", "No")
+    state['is_relevant'] = result.get('is_relevant', 'No')
     return state
 
-def check_competitor(state):
-    prompt = (
-        f"Company: {state['Company']}.\n"
-        "Is this a competitor? JSON: {'is_competitor':'Yes'/'No'}"
-    )
-    resp = client.chat.completions.create(
+
+def check_competitor(state: dict) -> dict:
+    prompt = f"""
+    Company: {state['Company']}
+    Is this an edtech competitor? JSON: {{'is_competitor':'Yes'/'No'}}
+    """
+    resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
     )
     result = json.loads(resp.choices[0].message.content)
-    state["is_competitor"] = result.get("is_competitor", "No")
+    state['is_competitor'] = result.get('is_competitor', 'No')
     return state
 
-def determine_tier(state):
-    prompt = (
-        f"Job Title: {state['Title']}\n"
-        f"Experience: {state['Experience']}\n"
-        "Determine tier: Fresher/Mid/Senior. JSON: {'job_tier':'...'}"
-    )
-    resp = client.chat.completions.create(
+
+def determine_tier(state: dict) -> dict:
+    prompt = f"""
+    Experience: {state['Experience']}
+    Determine tier: Fresher/Mid/Senior. JSON: {{'job_tier':'...'}}
+    """
+    resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
     )
     result = json.loads(resp.choices[0].message.content)
-    state["job_tier"] = result.get("job_tier", "N/A")
+    state['job_tier'] = result.get('job_tier', 'N/A')
     return state
+
 
 def build_pipeline():
     graph = StateGraph(dict)
-    graph.add_node("relevance", check_relevance)
-    graph.add_node("competitor", check_competitor)
-    graph.add_node("tier", determine_tier)
-    graph.add_edge("relevance", "competitor")
-    graph.add_edge("competitor", "tier")
-    graph.set_entry_point("relevance")
-    graph.set_finish_point("tier")
+    graph.add_node('relevance', check_relevance)
+    graph.add_node('competitor', check_competitor)
+    graph.add_node('tier', determine_tier)
+    graph.add_edge('relevance', 'competitor')
+    graph.add_edge('competitor', 'tier')
+    graph.set_entry_point('relevance')
+    graph.set_finish_point('tier')
     return graph.compile()
 
 pipeline = build_pipeline()
 
-# Tavily client
-tavily = TavilyClient(api_key=st.session_state.TAVILY_API_KEY)
+# -------------------- Helper Functions --------------------
 
-def get_career_page(company):
+def get_career_page(company: str) -> str:
     try:
-        res = tavily.search(query=f"{company} careers", max_results=1)
-        return res["results"][0]["url"] if res.get("results") else ""
+        res = tavily_client.search(query=f"{company} careers", max_results=1)
+        return res['results'][0]['url'] if res.get('results') else ''
     except:
-        return ""
+        return ''
 
-# ——————————————— Scraper & Helpers ———————————————
-def scrape_naukri(job_title, location, page=1):
-    ua = {"User-Agent": "Mozilla/5.0"}
-    q, loc = job_title.replace(" ", "-"), location.replace(" ", "-")
-    start = (page - 1) * 20
-    url = f"https://www.naukri.com/{q}-jobs-in-{loc}-{start}?k={job_title}&l={location}"
-    r = requests.get(url, headers=ua, timeout=10)
-    soup = BeautifulSoup(r.content, "html.parser")
-    cards = soup.select("article.jobTuple")
-    jobs = []
-    for c in cards:
+
+def scrape_jobs(domain: str) -> (list, str):
+    keyword = FIELD_KEYWORDS[domain]
+    ua = UserAgent()
+    headers = {'User-Agent': ua.random}
+    url = f"https://www.naukri.com/jobs-in-india?k={keyword}&l=india&jobAge=1"
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.content, 'html.parser')
+    cards = soup.select('article.jobTuple')
+    results = []
+
+    for card in cards:
         job = {
-            "Title": c.select_one("a.title").get_text(strip=True),
-            "Company": c.select_one("a.subTitle").get_text(strip=True),
-            "Location": c.select_one("li.location").get_text(strip=True),
-            "Experience": c.select_one("li.experience").get_text(strip=True),
-            "Description": c.select_one("div.job-description").get_text(strip=True)
+            'Title': card.select_one('a.title').get_text(strip=True),
+            'Company': card.select_one('a.subTitle').get_text(strip=True),
+            'Location': card.select_one('li.location').get_text(strip=True),
+            'Experience': card.select_one('li.experience').get_text(strip=True),
+            'Salary': (card.select_one('li.salary').get_text(strip=True)
+                       if card.select_one('li.salary') else 'Not disclosed'),
+            'Description': card.select_one('div.job-description').get_text(strip=True),
+            'Domain': domain
         }
-        # AI Pipeline
+        # Pipeline checks
         state = pipeline.invoke(job)
-        if state["is_relevant"].lower()=="yes" and state["is_competitor"].lower()=="no":
-            job["Job Tier"] = state["job_tier"]
-            job["Job Link"] = get_career_page(job["Company"])
-            jobs.append(job)
-    return jobs, url
+        if state['is_relevant'].lower() == 'yes' and state['is_competitor'].lower() == 'no':
+            job['Job Tier'] = state['job_tier']
+            job['Job Link'] = get_career_page(job['Company'])
+            results.append(job)
 
-def to_excel(df):
+    return results, url
+
+
+def to_excel(df: pd.DataFrame) -> bytes:
     buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        df.to_excel(w, index=False)
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False)
     return buf.getvalue()
 
-def extract_min_exp(exp):
-    if not exp or "fresher" in exp.lower(): return 0
-    try: return int(exp.split()[0])
-    except: return 0
+# -------------------- Streamlit App --------------------
 
-# ——————————————— UI Inputs & Run ———————————————
-job_title = st.text_input("Job Title", "Data Scientist")
-location  = st.text_input("Location",  "Bangalore")
-page      = st.number_input("Page", min_value=1, value=1)
-kw_filter = st.text_input("Title contains (opt)")
-min_exp   = st.number_input("Min Experience", min_value=0, value=0)
+st.set_page_config(page_title="Naukri Scraper", layout="wide")
+st.title("🌐 Naukri Domain-Specific Scraper")
 
-if st.button("🔍 Scrape & Filter"):
-    jobs, url = scrape_naukri(job_title, location, page)
-    # Structured filters
-    if kw_filter:
-        jobs = [j for j in jobs if kw_filter.lower() in j["Title"].lower()]
-    if min_exp:
-        jobs = [j for j in jobs if extract_min_exp(j["Experience"])>=min_exp]
+# Domain selection only
+selected_domain = st.selectbox("Select Job Domain", list(FIELD_KEYWORDS.keys()))
 
-    if not jobs:
-        st.warning("No jobs matched your criteria.")
-    else:
-        df = pd.DataFrame(jobs)
-        st.success(f"Found {len(df)} jobs. (URL: {url})")
-        st.dataframe(df, use_container_width=True)
+if st.button("🔍 Scrape Jobs"):
+    with st.spinner(f"Scraping jobs for {selected_domain}…"):
+        jobs, url = scrape_jobs(selected_domain)
+        if not jobs:
+            st.warning(f"No relevant {selected_domain} jobs found.")
+        else:
+            df = pd.DataFrame(jobs)
+            st.success(f"Found {len(df)} jobs for {selected_domain}.")
+            st.dataframe(df, use_container_width=True)
 
-        st.download_button(
-            "📥 Download Excel",
-            to_excel(df),
-            file_name=f"naukri_{job_title}_{location}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            # Download Excel
+            st.download_button(
+                label="📥 Download Excel",
+                data=to_excel(df),
+                file_name=f"Naukri_{selected_domain.replace(' ', '_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )

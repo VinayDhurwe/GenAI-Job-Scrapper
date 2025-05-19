@@ -475,37 +475,26 @@ def scrape_jobs(domain: str) -> (list, str):
     keyword = FIELD_KEYWORDS[domain]
     ua = UserAgent()
     headers = {'User-Agent': ua.random}
-    # URL-encode keyword
     k_enc = urllib.parse.quote_plus(keyword)
-    # Use Naukri's search endpoint
-    url = f"https://www.naukri.com/jobs?k={k_enc}&l=India&jobAge=1"
+    url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.content, 'html.parser')
-    # Main job wrapper selector
     wrappers = soup.select('div.srp-jobtuple-wrapper')
     results = []
 
     for wrapper in wrappers:
         job = wrapper.select_one('div.cust-job-tuple') or wrapper
         title_elem = job.select_one('a.title')
-        comp_elem  = job.select_one('a.subTitle')
-        loc_elem   = job.select_one('li.location')
-        exp_elem   = job.select_one('li.experience')
-        sal_elem   = job.select_one('li.salary')
-        desc_elem  = job.select_one('span.job-desc')
-
-        title = title_elem.get_text(strip=True) if title_elem else ''
-        if not title:
+        if not title_elem:
             continue
-
         job_data = {
-            'Title': title,
-            'Company': comp_elem.get_text(strip=True) if comp_elem else '',
-            'Location': loc_elem.get_text(strip=True) if loc_elem else '',
-            'Experience': exp_elem.get_text(strip=True) if exp_elem else '',
-            'Salary': sal_elem.get_text(strip=True) if sal_elem else 'Not disclosed',
-            'Description': desc_elem.get_text(strip=True) if desc_elem else '',
+            'Title': title_elem.get_text(strip=True),
+            'Company': job.select_one('a.subTitle').get_text(strip=True) if job.select_one('a.subTitle') else '',
+            'Location': job.select_one('li.location').get_text(strip=True) if job.select_one('li.location') else '',
+            'Experience': job.select_one('li.experience').get_text(strip=True) if job.select_one('li.experience') else '',
+            'Salary': job.select_one('li.salary').get_text(strip=True) if job.select_one('li.salary') else 'Not disclosed',
+            'Description': job.select_one('span.job-desc').get_text(strip=True) if job.select_one('span.job-desc') else '',
             'Domain': domain
         }
         state = pipeline.invoke(job_data)
@@ -516,6 +505,7 @@ def scrape_jobs(domain: str) -> (list, str):
 
     return results, url
 
+# -------------------- Excel Export --------------------
 
 def to_excel(df: pd.DataFrame) -> bytes:
     buf = BytesIO()

@@ -369,6 +369,7 @@ from groq import Groq
 from tavily import TavilyClient
 from langgraph.graph import StateGraph
 import json
+import urllib.parse
 
 # -------------------- Configuration --------------------
 # Domains and keywords
@@ -474,22 +475,31 @@ def scrape_jobs(domain: str) -> (list, str):
     keyword = FIELD_KEYWORDS[domain]
     ua = UserAgent()
     headers = {'User-Agent': ua.random}
-    url = f"https://www.naukri.com/jobs-in-india?k={keyword}&l=india&jobAge=1"
+    # URL-encode keyword
+    k_enc = urllib.parse.quote_plus(keyword)
+    url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.content, 'html.parser')
-    cards = soup.select('article.jobTuple')
+    # Updated selector: div.jobTuple or div.srp-jobtuple-wrapper
+    cards = soup.select('div.jobTuple, div.srp-jobtuple-wrapper')
     results = []
 
     for card in cards:
+        title_elem = card.select_one('a.title')
+        comp_elem  = card.select_one('a.subTitle')
+        loc_elem   = card.select_one('li.location')
+        exp_elem   = card.select_one('li.experience')
+        sal_elem   = card.select_one('li.salary')
+        desc_elem  = card.select_one('div.job-description, span.job-desc')
+
         job = {
-            'Title': card.select_one('a.title').get_text(strip=True),
-            'Company': card.select_one('a.subTitle').get_text(strip=True),
-            'Location': card.select_one('li.location').get_text(strip=True),
-            'Experience': card.select_one('li.experience').get_text(strip=True),
-            'Salary': (card.select_one('li.salary').get_text(strip=True)
-                       if card.select_one('li.salary') else 'Not disclosed'),
-            'Description': card.select_one('div.job-description').get_text(strip=True),
+            'Title': title_elem.get_text(strip=True) if title_elem else '',
+            'Company': comp_elem.get_text(strip=True) if comp_elem else '',
+            'Location': loc_elem.get_text(strip=True) if loc_elem else '',
+            'Experience': exp_elem.get_text(strip=True) if exp_elem else '',
+            'Salary': sal_elem.get_text(strip=True) if sal_elem else 'Not disclosed',
+            'Description': desc_elem.get_text(strip=True) if desc_elem else '',
             'Domain': domain
         }
         state = pipeline.invoke(job)
@@ -509,14 +519,13 @@ def to_excel(df: pd.DataFrame) -> bytes:
 
 # -------------------- Streamlit Interaction --------------------
 
-# Domain selection only
 selected_domain = st.selectbox("Select Job Domain", list(FIELD_KEYWORDS.keys()))
 
 if st.button("🔍 Scrape Jobs"):
     with st.spinner(f"Scraping jobs for {selected_domain}…"):
         jobs, url = scrape_jobs(selected_domain)
         if not jobs:
-            st.warning(f"No relevant {selected_domain} jobs found.")
+            st.warning(f"No relevant {selected_domain} jobs found. URL: {url}")
         else:
             df = pd.DataFrame(jobs)
             st.success(f"Found {len(df)} jobs for {selected_domain}. URL: {url}")

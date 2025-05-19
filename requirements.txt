@@ -1,11 +1,12 @@
 # requirements.txt
 
-streamlit
-playwright
-pandas
-XlsxWriter
-groq
-langgraph
-tavily-python
-beautifulsoup4
-fake-useragent
+streamlit==1.45.0
+pandas==2.2.3
+requests==2.32.3
+beautifulsoup4==4.13.3
+fake-useragent==2.1.0
+groq==0.20.0
+tavily-python==0.5.3
+langgraph==0.3.16
+XlsxWriter==3.2.3
+

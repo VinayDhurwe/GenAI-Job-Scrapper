@@ -6,6 +6,6 @@ pandas
 XlsxWriter
 groq
 langgraph
-tavily
+tavily-python
 beautifulsoup4
 fake-useragent

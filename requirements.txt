@@ -1,9 +1,10 @@
+# requirements.txt
 streamlit==1.24.0
-playwright
+playwright==1.40.0
 pandas==2.2.3
-XlsxWriter==3.2.3
-groq==0.20.0
+xlsxwriter==3.2.3
+groq==0.25.0  # Use latest stable version
 langgraph==0.3.16
-tavily-python==0.5.3
+tavily==0.5.3  # Correct package name (not tavily-python)
 beautifulsoup4==4.13.3
 fake-useragent==2.1.0

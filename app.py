@@ -359,7 +359,6 @@
 #     main()
 
 
-import os
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -386,15 +385,21 @@ FIELD_KEYWORDS = {
     "Product Management": "product management"
 }
 
-# API keys from environment
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-if not GROQ_API_KEY or not TAVILY_API_KEY:
-    raise ValueError("Please set GROQ_API_KEY and TAVILY_API_KEY environment variables.")
+# -------------------- Streamlit App Setup --------------------
+st.set_page_config(page_title="Naukri Scraper", layout="wide")
+st.title("🌐 Naukri Domain-Specific Scraper")
+
+# API key inputs
+groq_key = st.text_input("Groq API Key", type="password")
+tavily_key = st.text_input("Tavily API Key", type="password")
+
+if not groq_key or not tavily_key:
+    st.warning("Please enter both Groq and Tavily API keys to proceed.")
+    st.stop()
 
 # Initialize clients
-groq_client = Groq(api_key=GROQ_API_KEY)
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+groq_client = Groq(api_key=groq_key)
+tavily_client = TavilyClient(api_key=tavily_key)
 
 # -------------------- LangGraph Pipeline --------------------
 
@@ -487,7 +492,6 @@ def scrape_jobs(domain: str) -> (list, str):
             'Description': card.select_one('div.job-description').get_text(strip=True),
             'Domain': domain
         }
-        # Pipeline checks
         state = pipeline.invoke(job)
         if state['is_relevant'].lower() == 'yes' and state['is_competitor'].lower() == 'no':
             job['Job Tier'] = state['job_tier']
@@ -503,10 +507,7 @@ def to_excel(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, index=False)
     return buf.getvalue()
 
-# -------------------- Streamlit App --------------------
-
-st.set_page_config(page_title="Naukri Scraper", layout="wide")
-st.title("🌐 Naukri Domain-Specific Scraper")
+# -------------------- Streamlit Interaction --------------------
 
 # Domain selection only
 selected_domain = st.selectbox("Select Job Domain", list(FIELD_KEYWORDS.keys()))
@@ -518,10 +519,8 @@ if st.button("🔍 Scrape Jobs"):
             st.warning(f"No relevant {selected_domain} jobs found.")
         else:
             df = pd.DataFrame(jobs)
-            st.success(f"Found {len(df)} jobs for {selected_domain}.")
+            st.success(f"Found {len(df)} jobs for {selected_domain}. URL: {url}")
             st.dataframe(df, use_container_width=True)
-
-            # Download Excel
             st.download_button(
                 label="📥 Download Excel",
                 data=to_excel(df),

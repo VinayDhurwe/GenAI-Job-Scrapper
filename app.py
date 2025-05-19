@@ -468,42 +468,11 @@ def get_career_page(company: str, logs: list) -> str:
     try:
         res = tavily_client.search(query=f"{company} careers", max_results=1)
         url = res['results'][0]['url'] if res.get('results') else ''
-        logs.append(f"Found career URL: {url}")
-        return url
-    except Exception as e:
-        logs.append(f"Error fetching career page: {e}")
-        return ''
-
-
-def scrape_jobs(domain: str) -> (list, str, list):
-    logs = []
-    keyword = FIELD_KEYWORDS[domain]
-    logs.append(f"Domain: {domain}, Keyword: {keyword}")
-    ua = UserAgent()
-    headers = {'User-Agent': ua.random}
-    k_enc = urllib.parse.quote_plus(keyword)
-    url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
-    logs.append(f"Fetching URL: {url}")
-
-    # Initial request
-    resp = requests.get(url, headers=headers, timeout=10)
-    logs.append(f"Status Code: {resp.status_code}")
-    soup = BeautifulSoup(resp.text, 'html.parser')
-
-    # Handle meta-refresh redirect
-    meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
-    if meta and 'url=' in meta.get('content', ''):
-        redirect_url = meta['content'].split('url=')[1]
-        logs.append(f"Meta-refresh to: {redirect_url}")
-        time.sleep(2)
-        resp = requests.get(redirect_url, headers=headers, timeout=10)
-        logs.append(f"Post-redirect Status Code: {resp.status_code}")
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        url = redirect_url
-
-    time.sleep(1)
-    wrappers = soup.select('div.srp-jobtuple-wrapper')
-    logs.append(f"Found {len(wrappers)} job wrappers")
+        logs.append(f"Found {len(wrappers)} job wrappers")
+    # Debug: show snippet of HTML (first 200 characters)
+    snippet = resp.text[:200]
+    logs.append(f"HTML snippet: {snippet.replace('
+',' ')}")
     results = []
 
     for i, wrapper in enumerate(wrappers, start=1):

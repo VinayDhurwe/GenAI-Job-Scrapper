@@ -472,14 +472,33 @@ def get_career_page(company: str) -> str:
 
 
 def scrape_jobs(domain: str) -> (list, str):
+    import time
     keyword = FIELD_KEYWORDS[domain]
     ua = UserAgent()
     headers = {'User-Agent': ua.random}
     k_enc = urllib.parse.quote_plus(keyword)
+    # Initial URL that triggers meta-refresh
     url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
+
+    # First request
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.content, 'html.parser')
+    soup = BeautifulSoup(resp.text, 'html.parser')
+
+    # Handle meta-refresh redirect
+    meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
+    if meta and 'url=' in meta.get('content', ''):
+        redirect_url = meta['content'].split('url=')[1]
+        # slight delay to mimic page load
+        time.sleep(2)
+        resp = requests.get(redirect_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        url = redirect_url
+
+    # Allow extra time for content to stabilize
+    time.sleep(1)
+
     wrappers = soup.select('div.srp-jobtuple-wrapper')
     results = []
 

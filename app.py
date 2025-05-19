@@ -370,9 +370,9 @@ from tavily import TavilyClient
 from langgraph.graph import StateGraph
 import json
 import urllib.parse
+import time
 
 # -------------------- Configuration --------------------
-# Domains and keywords
 FIELD_KEYWORDS = {
     "Data Science": "data scientist",
     "Human Resources": "human resources",
@@ -388,7 +388,7 @@ FIELD_KEYWORDS = {
 
 # -------------------- Streamlit App Setup --------------------
 st.set_page_config(page_title="Naukri Scraper", layout="wide")
-st.title("🌐 Naukri Domain-Specific Scraper")
+st.title("🌐 Naukri Domain-Specific Scraper with Debugging")
 
 # API key inputs
 groq_key = st.text_input("Groq API Key", type="password")
@@ -463,50 +463,57 @@ pipeline = build_pipeline()
 
 # -------------------- Helper Functions --------------------
 
-def get_career_page(company: str) -> str:
+def get_career_page(company: str, logs: list) -> str:
+    logs.append(f"Looking up career page for {company}")
     try:
         res = tavily_client.search(query=f"{company} careers", max_results=1)
-        return res['results'][0]['url'] if res.get('results') else ''
-    except:
+        url = res['results'][0]['url'] if res.get('results') else ''
+        logs.append(f"Found career URL: {url}")
+        return url
+    except Exception as e:
+        logs.append(f"Error fetching career page: {e}")
         return ''
 
 
-def scrape_jobs(domain: str) -> (list, str):
-    import time
+def scrape_jobs(domain: str) -> (list, str, list):
+    logs = []
     keyword = FIELD_KEYWORDS[domain]
+    logs.append(f"Domain: {domain}, Keyword: {keyword}")
     ua = UserAgent()
     headers = {'User-Agent': ua.random}
     k_enc = urllib.parse.quote_plus(keyword)
-    # Initial URL that triggers meta-refresh
     url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
+    logs.append(f"Fetching URL: {url}")
 
-    # First request
+    # Initial request
     resp = requests.get(url, headers=headers, timeout=10)
-    resp.raise_for_status()
+    logs.append(f"Status Code: {resp.status_code}")
     soup = BeautifulSoup(resp.text, 'html.parser')
 
     # Handle meta-refresh redirect
     meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
     if meta and 'url=' in meta.get('content', ''):
         redirect_url = meta['content'].split('url=')[1]
-        # slight delay to mimic page load
+        logs.append(f"Meta-refresh to: {redirect_url}")
         time.sleep(2)
         resp = requests.get(redirect_url, headers=headers, timeout=10)
-        resp.raise_for_status()
+        logs.append(f"Post-redirect Status Code: {resp.status_code}")
         soup = BeautifulSoup(resp.text, 'html.parser')
         url = redirect_url
 
-    # Allow extra time for content to stabilize
     time.sleep(1)
-
     wrappers = soup.select('div.srp-jobtuple-wrapper')
+    logs.append(f"Found {len(wrappers)} job wrappers")
     results = []
 
-    for wrapper in wrappers:
+    for i, wrapper in enumerate(wrappers, start=1):
+        logs.append(f"Parsing wrapper {i}")
         job = wrapper.select_one('div.cust-job-tuple') or wrapper
         title_elem = job.select_one('a.title')
         if not title_elem:
+            logs.append(f"Skipping wrapper {i}, no title element")
             continue
+        logs.append(f"Title: {title_elem.get_text(strip=True)}")
         job_data = {
             'Title': title_elem.get_text(strip=True),
             'Company': job.select_one('a.subTitle').get_text(strip=True) if job.select_one('a.subTitle') else '',
@@ -517,12 +524,14 @@ def scrape_jobs(domain: str) -> (list, str):
             'Domain': domain
         }
         state = pipeline.invoke(job_data)
+        logs.append(f"Pipeline result: relevant={state['is_relevant']}, competitor={state['is_competitor']}")
         if state['is_relevant'].lower() == 'yes' and state['is_competitor'].lower() == 'no':
             job_data['Job Tier'] = state['job_tier']
-            job_data['Job Link'] = get_career_page(job_data['Company'])
+            job_data['Job Link'] = get_career_page(job_data['Company'], logs)
             results.append(job_data)
 
-    return results, url
+    logs.append(f"Total scraped jobs after filtering: {len(results)}")
+    return results, url, logs
 
 # -------------------- Excel Export --------------------
 
@@ -538,7 +547,13 @@ selected_domain = st.selectbox("Select Job Domain", list(FIELD_KEYWORDS.keys()))
 
 if st.button("🔍 Scrape Jobs"):
     with st.spinner(f"Scraping jobs for {selected_domain}…"):
-        jobs, url = scrape_jobs(selected_domain)
+        jobs, url, logs = scrape_jobs(selected_domain)
+
+        # Display debug logs
+        st.subheader("Debug Logs")
+        for log in logs:
+            st.text(log)
+
         if not jobs:
             st.warning(f"No relevant {selected_domain} jobs found. URL: {url}")
         else:

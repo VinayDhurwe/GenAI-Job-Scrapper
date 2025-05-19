@@ -545,7 +545,7 @@ def process_job(job: dict, field: str) -> Optional[dict]:
 # ------------------------- PLAYWRIGHT & BEAUTIFULSOUP FUNCTIONS -------------------------
 def extract_jobs(url):
     with sync_playwright() as p:
-        # Launch Chromium with flags for headless environments
+        # Launch Chromium with headless flags for cloud compatibility
         browser = p.chromium.launch(
             headless=True,
             args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
@@ -553,13 +553,14 @@ def extract_jobs(url):
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36")
         page = context.new_page()
         page.goto(url)
-
+        
+        # Wait for job listings to load
         try:
             page.wait_for_selector("div.srp-jobtuple-wrapper", timeout=20000)
         except:
             print("Timeout waiting for job results")
 
-        # Scroll to load all jobs
+        # Scroll to load more jobs
         last_height = page.evaluate("document.body.scrollHeight")
         while True:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -573,7 +574,7 @@ def extract_jobs(url):
         soup = BeautifulSoup(html, 'html.parser')
         context.close()
 
-        # Your existing extraction logic here...
+        # Your job extraction logic...
         job_list = []
         job_wrappers = soup.select("div.srp-jobtuple-wrapper")
         for wrapper in job_wrappers:

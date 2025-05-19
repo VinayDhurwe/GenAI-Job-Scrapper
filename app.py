@@ -406,11 +406,11 @@ tavily_client = TavilyClient(api_key=tavily_key)
 
 def check_relevance(state: dict) -> dict:
     prompt = f"""
-    Job Title: {state['Title']}
-    Company: {state['Company']}
-    Description: {state['Description']}
-    Determine relevance to {state['Domain']}. JSON: {{'is_relevant':'Yes'/'No'}}
-    """
+Job Title: {state['Title']}
+Company: {state['Company']}
+Description: {state['Description']}
+Determine relevance to {state['Domain']}. JSON: {{'is_relevant':'Yes'/'No'}}
+"""
     resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
@@ -422,9 +422,9 @@ def check_relevance(state: dict) -> dict:
 
 def check_competitor(state: dict) -> dict:
     prompt = f"""
-    Company: {state['Company']}
-    Is this an edtech competitor? JSON: {{'is_competitor':'Yes'/'No'}}
-    """
+Company: {state['Company']}
+Is this an edtech competitor? JSON: {{'is_competitor':'Yes'/'No'}}
+"""
     resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
@@ -436,9 +436,9 @@ def check_competitor(state: dict) -> dict:
 
 def determine_tier(state: dict) -> dict:
     prompt = f"""
-    Experience: {state['Experience']}
-    Determine tier: Fresher/Mid/Senior. JSON: {{'job_tier':'...'}}
-    """
+Experience: {state['Experience']}
+Determine tier: Fresher/Mid/Senior. JSON: {{'job_tier':'...'}}
+"""
     resp = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile"
@@ -468,28 +468,68 @@ def get_career_page(company: str, logs: list) -> str:
     try:
         res = tavily_client.search(query=f"{company} careers", max_results=1)
         url = res['results'][0]['url'] if res.get('results') else ''
-        logs.append(f"Found {len(wrappers)} job wrappers")
-    # Debug: show snippet of HTML (first 200 characters)
-    snippet = resp.text[:200]
-    logs.append(f"HTML snippet: {snippet.replace('
-',' ')}")
+        logs.append(f"Found career URL: {url}")
+        return url
+    except Exception as e:
+        logs.append(f"Error fetching career page: {e}")
+        return ''
+
+
+def scrape_jobs(domain: str) -> (list, str, list):
+    logs = []
+    keyword = FIELD_KEYWORDS[domain]
+    logs.append(f"Domain: {domain}, Keyword: {keyword}")
+    ua = UserAgent()
+    headers = {'User-Agent': ua.random}
+    k_enc = urllib.parse.quote_plus(keyword)
+    url = f"https://www.naukri.com/jobs-in-india?k={k_enc}&l=india&jobAge=1"
+    logs.append(f"Fetching URL: {url}")
+
+    # Initial request
+    resp = requests.get(url, headers=headers, timeout=10)
+    logs.append(f"Status Code: {resp.status_code}")
+    text = resp.text
+
+    # Debug: show snippet of HTML
+    snippet = text[:200].replace('\n', ' ')
+    logs.append(f"HTML snippet: {snippet}...")
+
+    soup = BeautifulSoup(text, 'html.parser')
+
+    # Handle meta-refresh redirect
+    meta = soup.find('meta', attrs={'http-equiv': 'refresh'})
+    if meta and 'url=' in meta.get('content', ''):
+        redirect_url = meta['content'].split('url=')[1]
+        logs.append(f"Meta-refresh to: {redirect_url}")
+        time.sleep(2)
+        resp = requests.get(redirect_url, headers=headers, timeout=10)
+        logs.append(f"Post-redirect Status Code: {resp.status_code}")
+        text = resp.text
+        snippet = text[:200].replace('\n', ' ')
+        logs.append(f"Post-redirect HTML snippet: {snippet}...")
+        soup = BeautifulSoup(text, 'html.parser')
+        url = redirect_url
+
+    time.sleep(1)
+    wrappers = soup.select('div.srp-jobtuple-wrapper')
+    logs.append(f"Found {len(wrappers)} job wrappers")
     results = []
 
     for i, wrapper in enumerate(wrappers, start=1):
         logs.append(f"Parsing wrapper {i}")
-        job = wrapper.select_one('div.cust-job-tuple') or wrapper
-        title_elem = job.select_one('a.title')
+        job_elem = wrapper.select_one('div.cust-job-tuple') or wrapper
+        title_elem = job_elem.select_one('a.title')
         if not title_elem:
             logs.append(f"Skipping wrapper {i}, no title element")
             continue
         logs.append(f"Title: {title_elem.get_text(strip=True)}")
         job_data = {
             'Title': title_elem.get_text(strip=True),
-            'Company': job.select_one('a.subTitle').get_text(strip=True) if job.select_one('a.subTitle') else '',
-            'Location': job.select_one('li.location').get_text(strip=True) if job.select_one('li.location') else '',
-            'Experience': job.select_one('li.experience').get_text(strip=True) if job.select_one('li.experience') else '',
-            'Salary': job.select_one('li.salary').get_text(strip=True) if job.select_one('li.salary') else 'Not disclosed',
-            'Description': job.select_one('span.job-desc').get_text(strip=True) if job.select_one('span.job-desc') else '',
+            'Company': job_elem.select_one('a.subTitle').get_text(strip=True) if job_elem.select_one('a.subTitle') else '',
+            'Location': job_elem.select_one('li.location').get_text(strip=True) if job_elem.select_one('li.location') else '',
+            'Experience': job_elem.select_one('li.experience').get_text(strip=True) if job_elem.select_one('li.experience') else '',
+            'Salary': job_elem.select_one('li.salary').get_text(strip=True) if job_elem.select_one('li.salary') else 'Not disclosed',
+            'Description': job_elem.select_one('span.job-desc').get_text(strip=True) if job_elem.select_one('span.job-desc') else '',
             'Domain': domain
         }
         state = pipeline.invoke(job_data)
@@ -518,7 +558,6 @@ if st.button("🔍 Scrape Jobs"):
     with st.spinner(f"Scraping jobs for {selected_domain}…"):
         jobs, url, logs = scrape_jobs(selected_domain)
 
-        # Display debug logs
         st.subheader("Debug Logs")
         for log in logs:
             st.text(log)

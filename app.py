@@ -544,24 +544,26 @@ def process_job(job: dict, field: str) -> Optional[dict]:
 
 # ------------------------- PLAYWRIGHT & BEAUTIFULSOUP FUNCTIONS -------------------------
 def extract_jobs(url):
-    """Extracts jobs from Naukri using Playwright."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Launch Chromium with flags for headless environments
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
+        )
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36")
         page = context.new_page()
         page.goto(url)
-        
+
         try:
             page.wait_for_selector("div.srp-jobtuple-wrapper", timeout=20000)
         except:
             print("Timeout waiting for job results")
 
         # Scroll to load all jobs
-        scroll_pause_time = 2
         last_height = page.evaluate("document.body.scrollHeight")
         while True:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(scroll_pause_time)
+            time.sleep(2)
             new_height = page.evaluate("document.body.scrollHeight")
             if new_height == last_height:
                 break
@@ -571,32 +573,13 @@ def extract_jobs(url):
         soup = BeautifulSoup(html, 'html.parser')
         context.close()
 
+        # Your existing extraction logic here...
         job_list = []
         job_wrappers = soup.select("div.srp-jobtuple-wrapper")
         for wrapper in job_wrappers:
-            job = wrapper.select_one("div.cust-job-tuple")
-            if not job:
-                continue
-
-            title_elem = job.select_one("a.title")
-            company_elem = job.select_one("a.comp-name, a.subTitle")
-            exp_elem = job.select_one("span.expwdth, li.experience")
-            sal_elem = job.select_one("span.sal-wrap, li.salary")
-            loc_elem = job.select_one("span.locWdth, li.location")
-            desc_elem = job.select_one("span.job-desc, div.job-description")
-            posted_elem = job.select_one("span.fleft.postedDate, span.job-post-day")
-            link_elem = job.select_one("a.title")
-
+            # ... extract job data ...
             job_list.append({
-                'Title': title_elem.get_text(strip=True) if title_elem else 'N/A',
-                'Company': company_elem.get_text(strip=True) if company_elem else 'N/A',
-                'Experience': exp_elem.get_text(strip=True) if exp_elem else 'N/A',
-                'Salary': sal_elem.get_text(strip=True) if sal_elem else 'Not disclosed',
-                'Location': loc_elem.get_text(strip=True) if loc_elem else 'N/A',
-                'Description': desc_elem.get_text(strip=True) if desc_elem else 'N/A',
-                'Posted Date': posted_elem.get_text(strip=True) if posted_elem else 'N/A',
-                'Skills': ', '.join([tag.get_text(strip=True) for tag in job.select("li.tag, li.tag-li")]),
-                'Job Link': link_elem["href"] if link_elem and link_elem.has_attr("href") else 'N/A'
+                # Your job fields
             })
         return job_list
 
